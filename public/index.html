@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Generative FM Groovebox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <main class="desk">
+      <header class="brand">
+        <div class="brand-text">
+          <p class="eyebrow">Computational Sound · Final</p>
+          <h1>Generative FM Groovebox</h1>
+          <p class="tagline">Step sequencer · FM · living audiovisual score</p>
+        </div>
+        <div class="global-transport" aria-label="Global transport">
+          <p id="play-indicator" class="play-indicator" aria-live="polite">Idle</p>
+          <div class="global-transport-actions">
+            <button id="start-btn" type="button" class="transport-btn">Start</button>
+            <button id="stop-btn" type="button" class="transport-btn ghost">Stop</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="desk-grid">
+        <section class="panel transport" aria-label="Tempo and level">
+          <h2>Tempo · level</h2>
+          <label>
+            BPM
+            <input id="bpm" type="range" min="60" max="180" step="1" value="120" />
+            <span id="bpm-value" class="readout">120</span>
+          </label>
+          <label>
+            Swing
+            <input id="swing" type="range" min="0" max="1" step="0.01" value="0.15" />
+            <span id="swing-value" class="readout">0.15</span>
+          </label>
+          <label>
+            Master
+            <input id="master-gain" type="range" min="0" max="1" step="0.01" value="0.35" />
+            <span id="master-gain-value" class="readout">0.35</span>
+          </label>
+          <canvas id="scope" class="scope" width="640" height="48" aria-label="Output waveform"></canvas>
+        </section>
+
+        <section class="panel fm" aria-label="FM parameters">
+          <h2>FM pad</h2>
+          <p class="hint pad-hint">Drag: <strong>→ ratio</strong> · <strong>↑ index</strong></p>
+          <div
+            id="fm-pad"
+            class="fm-pad gesture-surface"
+            role="application"
+            aria-label="FM timbre pad. Horizontal ratio, vertical index."
+            tabindex="0"
+          >
+            <div class="pad-glow" aria-hidden="true"></div>
+            <span class="pad-axis pad-axis-x">ratio</span>
+            <span class="pad-axis pad-axis-y">index</span>
+            <div class="pad-knob" aria-hidden="true"></div>
+          </div>
+          <div class="readout-strip" aria-live="polite">
+            <span>ratio <strong id="ratio-value">2.00</strong></span>
+            <span>index <strong id="index-value">140</strong></span>
+          </div>
+          <div class="row">
+            <button id="audition-btn" type="button">Audition</button>
+            <button id="tone-extras-btn" type="button" class="ghost" aria-expanded="false" aria-controls="tone-popover">
+              Tone extras
+            </button>
+          </div>
+          <input id="ratio" type="range" min="0.25" max="8" step="0.25" value="2" class="sr-slider" tabindex="-1" aria-hidden="true" />
+          <input id="index" type="range" min="0" max="800" step="1" value="140" class="sr-slider" tabindex="-1" aria-hidden="true" />
+        </section>
+
+        <section class="panel score" aria-label="Pattern and living score">
+          <div class="score-pattern">
+            <div class="pattern-head">
+              <h2>Pattern</h2>
+              <p id="gen-status" class="status" aria-live="polite">Ready</p>
+            </div>
+            <div id="step-grid" class="step-grid" role="group" aria-label="16 steps"></div>
+            <div class="preset-row" role="group" aria-label="Seed patterns">
+              <span class="preset-label">Seeds</span>
+              <button type="button" class="ghost preset-btn" data-preset="pulse">Pulse</button>
+              <button type="button" class="ghost preset-btn" data-preset="sparse">Sparse</button>
+              <button type="button" class="ghost preset-btn" data-preset="climb">Climb</button>
+            </div>
+            <p class="hint">Click pitch · Right-click lock · Shift-click probability · Draw below to plant</p>
+          </div>
+
+          <div class="score-living">
+            <div class="pattern-head">
+              <h2>Living score</h2>
+              <p id="living-status" class="status" aria-live="polite">Idle organism</p>
+            </div>
+            <p class="hint">Bloom → drift → bar write-back. Draw to plant · Right-click column to lock.</p>
+            <canvas
+              id="living-canvas"
+              class="living-canvas"
+              width="640"
+              height="200"
+              aria-label="Living audiovisual score. Draw to plant pitch. Right-click a column to lock."
+            ></canvas>
+          </div>
+        </section>
+
+        <section class="panel generate" aria-label="Generation">
+          <h2>Generate</h2>
+          <label>
+            Scale
+            <select id="scale">
+              <option value="minor-pentatonic" selected>Minor pentatonic</option>
+              <option value="major-pentatonic">Major pentatonic</option>
+              <option value="natural-minor">Natural minor</option>
+            </select>
+          </label>
+          <label>
+            Tonic (MIDI)
+            <input id="tonic" type="range" min="36" max="72" step="1" value="48" />
+            <span id="tonic-value" class="readout">48</span>
+          </label>
+          <label>
+            Density
+            <input id="density" type="range" min="0.15" max="0.9" step="0.05" value="0.5" />
+            <span id="density-value" class="readout">0.50</span>
+          </label>
+          <div class="row">
+            <button id="generate-btn" type="button">Generate</button>
+            <button id="mutate-btn" type="button" class="ghost">Mutate</button>
+            <button id="undo-btn" type="button" class="ghost" disabled>Undo</button>
+          </div>
+          <details class="how-details">
+            <summary>How to use</summary>
+            <ol class="guide-steps compact-steps">
+              <li><strong>Start</strong> — living score + resonance wake up.</li>
+              <li>Drag <strong>FM pad</strong> — brighter index = bigger bursts.</li>
+              <li>
+                Draw on <strong>Living score</strong> to plant pitch.
+                <strong>Right-click</strong> a step or living column to
+                <strong>lock / unlock</strong>.
+              </li>
+              <li>Watch <strong>Resonance</strong> for ripples from those notes. <strong>Undo</strong> peels a layer.</li>
+            </ol>
+          </details>
+        </section>
+
+        <section class="panel resonance" aria-label="Resonance visual field">
+          <div class="pattern-head">
+            <h2>Resonance</h2>
+            <p class="status">Drawn notes → light</p>
+          </div>
+          <p class="hint">
+            Each MIDI note has its own color. Carrier wave shapes the burst
+            (sine rings · tri shards · square boxes · saw streaks); mod tints the accent.
+          </p>
+          <canvas
+            id="hit-field"
+            class="hit-field"
+            width="640"
+            height="220"
+            aria-label="Visual effects field driven by sequenced and drawn notes"
+          ></canvas>
+        </section>
+      </div>
+
+      <div id="tone-popover" class="tone-popover" hidden role="dialog" aria-label="Tone extras">
+        <div class="tone-popover-head" id="tone-popover-drag" title="Drag to move">
+          <h2>Tone extras</h2>
+          <span class="tone-drag-hint" aria-hidden="true">drag</span>
+          <button id="tone-extras-close" type="button" class="ghost">Close</button>
+        </div>
+        <label>
+          Cutoff
+          <input id="cutoff" type="range" min="200" max="8000" step="10" value="4200" />
+          <span id="cutoff-value" class="readout">4200 Hz</span>
+        </label>
+        <label>
+          Feedback
+          <input id="feedback" type="range" min="0" max="0.6" step="0.01" value="0.08" />
+          <span id="feedback-value" class="readout">0.08</span>
+        </label>
+        <div class="wave-row">
+          <label>
+            Carrier
+            <select id="carrier-type">
+              <option value="sine" selected>sine</option>
+              <option value="triangle">triangle</option>
+              <option value="square">square</option>
+              <option value="sawtooth">sawtooth</option>
+            </select>
+          </label>
+          <label>
+            Mod
+            <select id="mod-type">
+              <option value="sine" selected>sine</option>
+              <option value="triangle">triangle</option>
+              <option value="square">square</option>
+              <option value="sawtooth">sawtooth</option>
+            </select>
+          </label>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
