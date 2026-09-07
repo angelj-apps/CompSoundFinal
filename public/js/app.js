@@ -1,4 +1,4 @@
-import { playFmNote, midiToHz } from "./fmVoice.js";
+import { playFmNote, midiToHz, midiToNoteName } from "./fmVoice.js";
 import { createScheduler } from "./scheduler.js";
 import { generatePattern, mutatePattern, pitchesForScale } from "./generator.js";
 import { PRESETS, getPreset } from "./presets.js";
@@ -6,6 +6,8 @@ import { createVisualizer } from "./visualizer.js";
 import { createHitField } from "./hitField.js";
 import { bindFmPad } from "./gestures.js";
 import { createLivingScore } from "./livingArt.js";
+import { createMelodyStack, normalizeScene } from "./melodyStack.js";
+import { createClimate } from "./climate.js";
 
 const AUDITION_MIDI = 60;
 const PROB_CYCLE = [1, 0.75, 0.5, 0.25];
@@ -31,6 +33,10 @@ const ui = {
   swingValue: document.querySelector("#swing-value"),
   masterGain: document.querySelector("#master-gain"),
   masterGainValue: document.querySelector("#master-gain-value"),
+  ampAttack: document.querySelector("#amp-attack"),
+  ampAttackValue: document.querySelector("#amp-attack-value"),
+  ampDecay: document.querySelector("#amp-decay"),
+  ampDecayValue: document.querySelector("#amp-decay-value"),
   scope: document.querySelector("#scope"),
   fmPad: document.querySelector("#fm-pad"),
   auditionBtn: document.querySelector("#audition-btn"),
@@ -58,8 +64,14 @@ const ui = {
   mutateBtn: document.querySelector("#mutate-btn"),
   undoBtn: document.querySelector("#undo-btn"),
   livingCanvas: document.querySelector("#living-canvas"),
+  seasonBadge: document.querySelector("#season-badge"),
+  tempFill: document.querySelector("#temp-fill"),
+  tempReadout: document.querySelector("#temp-readout"),
+  climateBias: document.querySelector("#climate-bias"),
+  climateBiasValue: document.querySelector("#climate-bias-value"),
   livingStatus: document.querySelector("#living-status"),
   hitField: document.querySelector("#hit-field"),
+  melodyStackList: document.querySelector("#melody-stack-list"),
   presetButtons: [...document.querySelectorAll("[data-preset]")]
 };
 
@@ -79,27 +91,71 @@ masterGain.connect(analyser);
 analyser.connect(audioCtx.destination);
 
 const visualizer = createVisualizer(analyser, ui.scope);
-const hitField = createHitField(ui.hitField, () => ({
-  ratio: Number(ui.ratio.value),
-  index: Number(ui.index.value),
-  carrierType: /** @type {OscillatorType} */ (ui.carrierType.value),
-  modType: /** @type {OscillatorType} */ (ui.modType.value)
-}));
+const hitField = createHitField(
+  ui.hitField,
+  () => ({
+    ratio: Number(ui.ratio.value),
+    index: Number(ui.index.value),
+    carrierType: /** @type {OscillatorType} */ (ui.carrierType.value),
+    modType: /** @type {OscillatorType} */ (ui.modType.value)
+  }),
+  {
+    onDismissSpark(stepIndex) {
+      const step = pattern[stepIndex];
+      if (!step || step.locked || step.note == null) return;
+      const next = pattern.map((s, i) =>
+        i === stepIndex
+          ? { note: null, locked: Boolean(s.locked), probability: s.probability ?? 1 }
+          : { note: s.note, locked: Boolean(s.locked), probability: s.probability ?? 1 }
+      );
+      syncingFromLife = true;
+      pattern = next;
+      scheduler.setPattern(pattern);
+      renderSteps();
+      living?.syncFromPattern(pattern);
+      syncingFromLife = false;
+      clearPresetSelection();
+      setLivingStatus("Cleared resonance spark");
+      setStatus(`Step ${stepIndex + 1} → rest`);
+    }
+  }
+);
+
+const melodyStack = createMelodyStack();
+
+const climate = createClimate({
+  getBias: () => Number(ui.climateBias?.value ?? 0),
+  onSeasonChange(season) {
+    setLivingStatus(`${season.name}: the garden turns`);
+  }
+});
 
 /** @type {ReturnType<typeof createLivingScore> | null} */
 let living = null;
 let syncingFromLife = false;
 
 const scheduler = createScheduler(audioCtx, {
-  onStep(stepIndex, timeSec, note) {
-    if (note != null) {
-      playFmNote(audioCtx, masterGain, currentFmParams(midiToHz(note)), timeSec);
+  onStep(stepIndex, timeSec, voices, primaryNote) {
+    const voiceScale = voices.length > 1 ? 1 / Math.sqrt(voices.length) : 1;
+    for (const scheduled of voices) {
+      playFmNote(
+        audioCtx,
+        masterGain,
+        {
+          ...fmParamsFromVoice(scheduled.note, scheduled.voice),
+          ampLevel: voiceScale
+        },
+        timeSec
+      );
     }
     const delayMs = Math.max(0, (timeSec - audioCtx.currentTime) * 1000);
     setTimeout(() => {
       if (!scheduler.isRunning()) return;
-      living?.onStep(stepIndex, note);
-      hitField.onHit(stepIndex, note);
+      const livingNote = primaryNote ?? voices[0]?.note ?? null;
+      living?.onStep(stepIndex, livingNote);
+      for (const scheduled of voices) {
+        hitField.onHit(stepIndex, scheduled.note, voiceFeelFrom(scheduled.voice));
+      }
     }, delayMs);
   },
   onHighlight: highlightStep
@@ -108,6 +164,7 @@ const scheduler = createScheduler(audioCtx, {
 scheduler.setBpm(Number(ui.bpm.value));
 scheduler.setSwing(Number(ui.swing.value));
 scheduler.setPattern(pattern);
+scheduler.setStackLayers(melodyStack.layersForScheduler());
 
 living = createLivingScore(ui.livingCanvas, {
   getPattern: () => pattern,
@@ -117,19 +174,32 @@ living = createLivingScore(ui.livingCanvas, {
     index: Number(ui.index.value),
     swing: Number(ui.swing.value)
   }),
-  onPatternFromLife(nextPattern) {
+  getClimate: () => climate.feel(),
+  onBar() {
+    climate.advanceBar();
+    syncClimateReadout();
+  },
+  onPatternFromLife(nextPattern, growth) {
     syncingFromLife = true;
     pattern = nextPattern;
     scheduler.setPattern(pattern);
     renderSteps();
     clearPresetSelection();
-    setLivingStatus("Loop write-back — garden reshaped the pattern");
-    setStatus("Living score wrote unlocked pitches back");
+    if (growth) {
+      const parts = [];
+      if (growth.sprouted) parts.push(`${growth.sprouted} sprouted`);
+      if (growth.withered) parts.push(`${growth.withered} withered`);
+      setLivingStatus(`${climate.season().name}: ${parts.join(" · ")}`);
+      setStatus(`Season growth: ${parts.join(" · ")}`);
+    } else {
+      setLivingStatus("Loop write-back: garden reshaped the pattern");
+      setStatus("Living score wrote unlocked pitches back");
+    }
     syncingFromLife = false;
   },
   onPlant(stepIndex, note) {
     hitField.onPlant(stepIndex, note);
-    setLivingStatus("Planted — resonance sparks");
+    setLivingStatus(note == null ? "Cleared spark" : "Planted: resonance sparks");
   }
 });
 
@@ -162,6 +232,34 @@ const fmPad = bindFmPad(ui.fmPad, {
   }
 });
 
+/**
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ */
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/**
+ * Season badge, temperature meter and bias readout.
+ * Temperature only moves on bar lines, so the CSS transition does the gliding.
+ */
+function syncClimateReadout() {
+  const feel = climate.feel();
+  if (ui.seasonBadge) ui.seasonBadge.textContent = feel.seasonName;
+  if (ui.tempFill) {
+    ui.tempFill.style.width = `${Math.round(feel.temperature * 100)}%`;
+    ui.tempFill.style.backgroundColor = `rgb(${feel.palette.mark.join(", ")})`;
+  }
+  if (ui.tempReadout) {
+    ui.tempReadout.textContent = `${feel.label} · ${feel.temperature.toFixed(2)}`;
+  }
+  if (ui.climateBiasValue && ui.climateBias) {
+    ui.climateBiasValue.textContent = Number(ui.climateBias.value).toFixed(2);
+  }
+}
+
 function setStatus(message) {
   ui.genStatus.textContent = message;
 }
@@ -177,7 +275,7 @@ function setPlaying(isPlaying) {
     visualizer.start();
     hitField.start();
     living?.start();
-    setLivingStatus("Organism awake — blooming & drifting");
+    setLivingStatus("Organism awake: blooming & drifting");
   } else {
     visualizer.stop();
     hitField.stop();
@@ -190,23 +288,139 @@ function syncReadouts() {
   ui.bpmValue.textContent = ui.bpm.value;
   ui.swingValue.textContent = Number(ui.swing.value).toFixed(2);
   ui.masterGainValue.textContent = Number(ui.masterGain.value).toFixed(2);
+  ui.ampAttackValue.textContent = Number(ui.ampAttack.value).toFixed(3);
+  ui.ampDecayValue.textContent = Number(ui.ampDecay.value).toFixed(2);
   ui.ratioValue.textContent = Number(ui.ratio.value).toFixed(2);
   ui.indexValue.textContent = ui.index.value;
   ui.cutoffValue.textContent = `${ui.cutoff.value} Hz`;
   ui.feedbackValue.textContent = Number(ui.feedback.value).toFixed(2);
-  ui.tonicValue.textContent = ui.tonic.value;
+  ui.tonicValue.textContent = `${midiToNoteName(Number(ui.tonic.value))} · ${ui.tonic.value}`;
   ui.densityValue.textContent = Number(ui.density.value).toFixed(2);
 }
 
+/**
+ * Climate tint, but only while the garden is actually running. A stopped
+ * instrument auditions exactly as its sliders read.
+ */
+function climateTint() {
+  if (!scheduler.isRunning()) return { cutoffMul: 1, decayMul: 1 };
+  const feel = climate.feel();
+  return { cutoffMul: feel.cutoffMul, decayMul: feel.decayMul };
+}
+
 function currentFmParams(carrierHz) {
+  const feel = climateTint();
+  const ampAttack = Number(ui.ampAttack.value);
+  // Climate tints the Home voice without ever writing back to the sliders.
+  const ampDecay = clamp(Number(ui.ampDecay.value) * feel.decayMul, 0.05, 1.2);
   return {
     carrierHz,
     ratio: Number(ui.ratio.value),
     index: Number(ui.index.value),
-    cutoff: Number(ui.cutoff.value),
+    cutoff: clamp(Number(ui.cutoff.value) * feel.cutoffMul, 200, 8000),
     feedback: Number(ui.feedback.value),
     carrierType: /** @type {OscillatorType} */ (ui.carrierType.value),
-    modType: /** @type {OscillatorType} */ (ui.modType.value)
+    modType: /** @type {OscillatorType} */ (ui.modType.value),
+    ampAttack,
+    ampDecay,
+    // Keep FM index envelope in step with the amp envelope.
+    indexAttack: Math.max(0.005, ampAttack * 1.2),
+    indexDecay: Math.max(0.05, ampDecay * 0.9)
+  };
+}
+
+/**
+ * Snapshot of Home: FM pad + tone extras + tempo/level + generate.
+ */
+function captureScene() {
+  return normalizeScene({
+    bpm: Number(ui.bpm.value),
+    swing: Number(ui.swing.value),
+    masterGain: Number(ui.masterGain.value),
+    ratio: Number(ui.ratio.value),
+    index: Number(ui.index.value),
+    cutoff: Number(ui.cutoff.value),
+    feedback: Number(ui.feedback.value),
+    carrierType: ui.carrierType.value,
+    modType: ui.modType.value,
+    scaleId: ui.scale.value,
+    tonicMidi: Number(ui.tonic.value),
+    density: Number(ui.density.value),
+    ampAttack: Number(ui.ampAttack.value),
+    ampDecay: Number(ui.ampDecay.value),
+    climateBias: Number(ui.climateBias?.value ?? 0)
+  });
+}
+
+/**
+ * @param {import("./melodyStack.js").MelodyScene} scene
+ * @param {{ applyTransport?: boolean }} [options]
+ */
+function applyScene(scene, options = {}) {
+  const next = normalizeScene(scene);
+  const applyTransport = options.applyTransport !== false;
+
+  if (applyTransport) {
+    ui.bpm.value = String(next.bpm);
+    ui.swing.value = String(next.swing);
+    ui.masterGain.value = String(next.masterGain);
+    masterGain.gain.value = next.masterGain;
+    scheduler.setBpm(next.bpm);
+    scheduler.setSwing(next.swing);
+  }
+
+  ui.ratio.value = String(next.ratio);
+  ui.index.value = String(next.index);
+  ui.cutoff.value = String(next.cutoff);
+  ui.feedback.value = String(next.feedback);
+  ui.carrierType.value = next.carrierType;
+  ui.modType.value = next.modType;
+  ui.scale.value = next.scaleId;
+  ui.tonic.value = String(next.tonicMidi);
+  ui.density.value = String(next.density);
+  ui.ampAttack.value = String(next.ampAttack);
+  ui.ampDecay.value = String(next.ampDecay);
+  if (ui.climateBias) ui.climateBias.value = String(next.climateBias);
+  syncReadouts();
+  syncClimateReadout();
+  fmPad.setFromValues(next.ratio, next.index);
+}
+
+/**
+ * @param {number} midiNote
+ * @param {import("./scheduler.js").LayerVoice | null} voice
+ */
+function fmParamsFromVoice(midiNote, voice) {
+  if (!voice) return currentFmParams(midiToHz(midiNote));
+  const ampAttack = voice.ampAttack ?? Number(ui.ampAttack.value);
+  const ampDecay = voice.ampDecay ?? Number(ui.ampDecay.value);
+  return {
+    carrierHz: midiToHz(midiNote),
+    ratio: voice.ratio,
+    index: voice.index,
+    cutoff: voice.cutoff,
+    feedback: voice.feedback,
+    carrierType: /** @type {OscillatorType} */ (voice.carrierType),
+    modType: /** @type {OscillatorType} */ (voice.modType),
+    ampAttack,
+    ampDecay,
+    indexAttack: Math.max(0.005, ampAttack * 1.2),
+    indexDecay: Math.max(0.05, ampDecay * 0.9)
+  };
+}
+
+/**
+ * Resonance styling for one scheduled voice. Saved layers keep their own look.
+ * @param {{ ratio: number, index: number, carrierType: string, modType: string } | null | undefined} voice
+ * @returns {{ ratio: number, index: number, carrierType: OscillatorType, modType: OscillatorType } | null}
+ */
+function voiceFeelFrom(voice) {
+  if (!voice) return null;
+  return {
+    ratio: voice.ratio ?? Number(ui.ratio.value),
+    index: voice.index ?? Number(ui.index.value),
+    carrierType: /** @type {OscillatorType} */ (voice.carrierType || ui.carrierType.value),
+    modType: /** @type {OscillatorType} */ (voice.modType || ui.modType.value)
   };
 }
 
@@ -254,10 +468,191 @@ function clearPresetSelection() {
   ui.presetButtons.forEach((button) => button.classList.remove("is-selected"));
 }
 
+function syncStackToScheduler() {
+  scheduler.setStackLayers(
+    melodyStack.layersForScheduler().map((layer) => ({
+      armed: layer.armed,
+      steps: layer.steps,
+      voice: layer.scene
+        ? {
+            ratio: layer.scene.ratio,
+            index: layer.scene.index,
+            cutoff: layer.scene.cutoff,
+            feedback: layer.scene.feedback,
+            carrierType: layer.scene.carrierType,
+            modType: layer.scene.modType,
+            ampAttack: layer.scene.ampAttack,
+            ampDecay: layer.scene.ampDecay
+          }
+        : null
+    }))
+  );
+}
+
+/** Home working tab id in the stack UI. */
+const HOME_TAB_ID = "home";
+/** @type {string} */
+let activeMelodyTab = HOME_TAB_ID;
+let homeMuted = false;
+
+function selectHomeTab() {
+  activeMelodyTab = HOME_TAB_ID;
+  renderMelodyStack();
+}
+
+function loadSavedMelody(id) {
+  const saved = melodyStack.get(id);
+  if (!saved) return;
+  applyScene(saved.scene, { applyTransport: true });
+  applyPattern(cloneSteps(saved.steps), `Editing “${saved.name}”`, { selectTab: id });
+}
+
+function renderMelodyStack() {
+  const list = ui.melodyStackList;
+  if (!list) return;
+  list.innerHTML = "";
+
+  // Default working tab: saves always come from the live editor.
+  const homeLi = document.createElement("li");
+  homeLi.className = `melody-stack-item melody-stack-home${
+    activeMelodyTab === HOME_TAB_ID ? " is-active" : ""
+  }`;
+  homeLi.dataset.id = HOME_TAB_ID;
+
+  const homePlayBtn = document.createElement("button");
+  homePlayBtn.type = "button";
+  homePlayBtn.className = `stack-transport ghost${homeMuted ? "" : " is-playing"}`;
+  homePlayBtn.setAttribute("aria-label", homeMuted ? "Play Home melody" : "Pause Home melody");
+  homePlayBtn.title = homeMuted ? "Play Home melody" : "Pause Home melody";
+  homePlayBtn.innerHTML = homeMuted
+    ? '<span class="stack-icon" aria-hidden="true">▶</span>'
+    : '<span class="stack-icon" aria-hidden="true">❚❚</span>';
+  homePlayBtn.addEventListener("click", () => {
+    homeMuted = !homeMuted;
+    scheduler.setPatternMuted(homeMuted);
+    renderMelodyStack();
+    if (homeMuted) {
+      setStatus("Home paused: saved layers keep looping");
+    } else {
+      setStatus("Home playing");
+      if (!scheduler.isRunning()) void startTransport();
+    }
+  });
+
+  const homeBtn = document.createElement("button");
+  homeBtn.type = "button";
+  homeBtn.className = "ghost stack-name";
+  homeBtn.textContent = "Home";
+  homeBtn.title = "Home: working melody on the grid / living score";
+  homeBtn.setAttribute("aria-current", activeMelodyTab === HOME_TAB_ID ? "true" : "false");
+  homeBtn.addEventListener("click", () => {
+    selectHomeTab();
+    setStatus("Home: draw, tweak FM/tempo/generate, then Save");
+  });
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "ghost compact-btn stack-save-btn";
+  saveBtn.id = "save-melody-btn";
+  saveBtn.textContent = "Save";
+  saveBtn.title = "Save Home melody + FM + tempo + generate settings";
+  saveBtn.addEventListener("click", () => {
+    saveHomeMelody();
+  });
+
+  const spacer = document.createElement("span");
+  spacer.className = "stack-spacer";
+  spacer.setAttribute("aria-hidden", "true");
+
+  homeLi.append(homePlayBtn, homeBtn, saveBtn, spacer);
+  list.append(homeLi);
+
+  melodyStack.list().forEach((entry) => {
+    const playing = entry.armed;
+    const selected = activeMelodyTab === entry.id;
+    const li = document.createElement("li");
+    li.className = `melody-stack-item${playing ? " is-playing" : ""}${selected ? " is-active" : ""}`;
+    li.dataset.id = entry.id;
+
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = `stack-transport ghost${playing ? " is-playing" : ""}`;
+    playBtn.setAttribute("aria-label", playing ? `Pause ${entry.name}` : `Play ${entry.name}`);
+    playBtn.title = playing ? "Pause loop" : "Play loop with Home";
+    playBtn.innerHTML = playing
+      ? '<span class="stack-icon" aria-hidden="true">❚❚</span>'
+      : '<span class="stack-icon" aria-hidden="true">▶</span>';
+    playBtn.addEventListener("click", () => {
+      const nowPlaying = melodyStack.togglePlaying(entry.id);
+      syncStackToScheduler();
+      renderMelodyStack();
+      if (nowPlaying) {
+        setStatus(`Looping “${entry.name}” with Home`);
+        if (!scheduler.isRunning()) void startTransport();
+      } else {
+        setStatus(`Paused “${entry.name}”`);
+      }
+    });
+
+    const nameBtn = document.createElement("button");
+    nameBtn.type = "button";
+    nameBtn.className = "ghost stack-name";
+    nameBtn.textContent = entry.name;
+    nameBtn.title = `Edit “${entry.name}”`;
+    nameBtn.setAttribute("aria-label", `Edit ${entry.name}`);
+    nameBtn.setAttribute("aria-current", selected ? "true" : "false");
+    nameBtn.addEventListener("click", () => {
+      loadSavedMelody(entry.id);
+    });
+
+    const loadBtn = document.createElement("button");
+    loadBtn.type = "button";
+    loadBtn.className = "ghost stack-icon-btn";
+    loadBtn.setAttribute("aria-label", `Load ${entry.name} to edit`);
+    loadBtn.title = "Load to edit";
+    loadBtn.innerHTML = '<span class="stack-icon" aria-hidden="true">↺</span>';
+    loadBtn.addEventListener("click", () => {
+      loadSavedMelody(entry.id);
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "ghost stack-icon-btn";
+    delBtn.setAttribute("aria-label", `Delete ${entry.name}`);
+    delBtn.title = "Delete saved melody";
+    delBtn.innerHTML = '<span class="stack-icon" aria-hidden="true">🗑</span>';
+    delBtn.addEventListener("click", () => {
+      const wasSelected = activeMelodyTab === entry.id;
+      melodyStack.remove(entry.id);
+      if (wasSelected) activeMelodyTab = HOME_TAB_ID;
+      syncStackToScheduler();
+      renderMelodyStack();
+      setStatus(`Removed “${entry.name}”`);
+    });
+
+    li.append(playBtn, nameBtn, loadBtn, delBtn);
+    list.append(li);
+  });
+}
+
+function saveHomeMelody() {
+  const result = melodyStack.add(pattern, captureScene());
+  if (!result.ok) {
+    setStatus(result.reason);
+    return;
+  }
+  activeMelodyTab = HOME_TAB_ID;
+  syncStackToScheduler();
+  renderMelodyStack();
+  setStatus(
+    `Saved Home (notes · FM · tempo · generate) as “${result.entry.name}” (${melodyStack.list().length}/${melodyStack.maxSlots})`
+  );
+}
+
 /**
  * @param {{ note: number | null, locked: boolean, probability: number }[]} nextPattern
  * @param {string} status
- * @param {{ keepPreset?: boolean, recordUndo?: boolean }} [options]
+ * @param {{ keepPreset?: boolean, recordUndo?: boolean, selectTab?: string }} [options]
  */
 function applyPattern(nextPattern, status, options = {}) {
   if (options.recordUndo) pushUndo();
@@ -266,6 +661,8 @@ function applyPattern(nextPattern, status, options = {}) {
   renderSteps();
   setStatus(status);
   if (!options.keepPreset) clearPresetSelection();
+  activeMelodyTab = options.selectTab ?? HOME_TAB_ID;
+  renderMelodyStack();
   if (!syncingFromLife) {
     living?.syncFromPattern(pattern);
     setLivingStatus(options.recordUndo ? "Garden reflowed from generate/mutate" : "Marks synced to pattern");
@@ -311,7 +708,9 @@ function cycleStepNote(index) {
   );
   applyPattern(
     nextPattern,
-    next == null ? `Step ${index + 1} → rest` : `Step ${index + 1} → MIDI ${next}`
+    next == null
+      ? `Step ${index + 1} → rest`
+      : `Step ${index + 1} → ${midiToNoteName(next)} (${next})`
   );
   if (next != null) void auditionMidi(next);
 }
@@ -368,8 +767,12 @@ function renderSteps() {
       (step.probability ?? 1) < 1
         ? `<span class="prob">${Math.round((step.probability ?? 1) * 100)}%</span>`
         : "";
-    cell.innerHTML = `<span class="idx">${index + 1}${lockMark}</span><span>${step.note ?? "·"}</span>${prob}`;
-    cell.title = "Click: pitch · Right-click: lock · Shift-click: probability";
+    const pitchLabel = step.note == null ? "·" : midiToNoteName(step.note);
+    cell.innerHTML = `<span class="idx">${index + 1}${lockMark}</span><span class="pitch">${pitchLabel}</span>${prob}`;
+    cell.title =
+      step.note == null
+        ? "Rest · Click: pitch · Right-click: lock · Shift-click: probability"
+        : `${pitchLabel} (MIDI ${step.note}) · Click: pitch · Right-click: lock · Shift-click: probability`;
     cell.addEventListener("click", (event) => {
       if (event.shiftKey) cycleStepProbability(index);
       else cycleStepNote(index);
@@ -413,9 +816,9 @@ function undoPattern() {
   scheduler.setPattern(pattern);
   renderSteps();
   clearPresetSelection();
-  setStatus("Undo — restored previous pattern");
+  setStatus("Undo: restored previous pattern");
   living?.syncFromPattern(pattern);
-  setLivingStatus("Undo — garden restored");
+  setLivingStatus("Undo: garden restored");
 }
 
 function wireControls() {
@@ -434,6 +837,9 @@ function wireControls() {
     masterGain.gain.value = Number(ui.masterGain.value);
   });
 
+  ui.ampAttack.addEventListener("input", syncReadouts);
+  ui.ampDecay.addEventListener("input", syncReadouts);
+
   ui.cutoff.addEventListener("input", syncReadouts);
   ui.feedback.addEventListener("input", syncReadouts);
   ui.tonic.addEventListener("input", () => {
@@ -444,6 +850,7 @@ function wireControls() {
     living?.syncFromPattern(pattern);
   });
   ui.density.addEventListener("input", syncReadouts);
+  ui.climateBias?.addEventListener("input", syncClimateReadout);
 
   ui.auditionBtn.addEventListener("click", () => {
     void auditionMidi(AUDITION_MIDI).then(() => {
@@ -605,7 +1012,10 @@ function wireControls() {
 
 wireControls();
 loadPreset("pulse");
+renderMelodyStack();
+syncStackToScheduler();
+syncClimateReadout();
 updateUndoButton();
 setPlaying(false);
 visualizer.stop();
-setStatus("Living score ready — Start, then watch the garden breathe");
+setStatus("Living score ready: Start, then watch the garden breathe");

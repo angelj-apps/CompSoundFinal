@@ -1,7 +1,10 @@
 /**
- * Living Score — closed audiovisual loop.
+ * Living Score: closed audiovisual loop.
  * Marks bloom with FM hits, drift while unlocked, and write pitch back each loop.
+ * Season/temperature arrive via getClimate and scale how far the seeds roam.
  */
+
+import { NEUTRAL_CLIMATE } from "./climate.js";
 
 /**
  * @typedef {object} LivingMark
@@ -18,9 +21,11 @@
 /**
  * @typedef {object} LivingHooks
  * @property {() => { note: number | null, locked: boolean, probability?: number }[]} getPattern
- * @property {(pattern: { note: number | null, locked: boolean, probability: number }[]) => void} onPatternFromLife
+ * @property {(pattern: { note: number | null, locked: boolean, probability: number }[], growth?: { sprouted: number, withered: number }) => void} onPatternFromLife
  * @property {() => number[]} getPitches
  * @property {() => { ratio: number, index: number, swing: number }} getVoiceFeel
+ * @property {() => import("./climate.js").ClimateFeel} [getClimate]
+ * @property {() => void} [onBar]
  * @property {(stepIndex: number, note: number | null) => void} [onPlant]
  */
 
@@ -40,8 +45,14 @@ export function createLivingScore(canvas, hooks) {
   /** Skip write-back for this many steps after an external pattern sync (generate/preset). */
   let writeBackCooldown = 0;
 
+  let stepsSinceBar = 0;
+
   const STEP_COUNT = 16;
   const WRITE_BACK_COOLDOWN_STEPS = STEP_COUNT * 2;
+  /** Growth runs mid-bar so it never shares a step with write-back. */
+  const GROWTH_STEP = STEP_COUNT / 2;
+  const MIN_NOTES = 2;
+  const MAX_NOTES = 13;
 
   function sizeCanvas() {
     if (!ctx) return { width: 320, height: 220 };
@@ -176,10 +187,93 @@ export function createLivingScore(canvas, hooks) {
   }
 
   /**
+   * Pitch for a fresh sprout: one scale step off the nearest neighbour so
+   * growth stays in the melodic neighbourhood instead of jumping anywhere.
+   * @param {{ note: number | null }[]} pattern
+   * @param {number} stepIndex
+   * @param {number[]} pitches
+   */
+  function sproutPitch(pattern, stepIndex, pitches) {
+    /** @type {number | null} */
+    let neighbour = null;
+    for (let offset = 1; offset < STEP_COUNT && neighbour == null; offset += 1) {
+      neighbour = pattern[stepIndex - offset]?.note ?? pattern[stepIndex + offset]?.note ?? null;
+    }
+    if (neighbour == null) {
+      return pitches[Math.floor(Math.random() * pitches.length)];
+    }
+
+    let nearest = 0;
+    pitches.forEach((pitch, index) => {
+      if (Math.abs(pitch - neighbour) < Math.abs(pitches[nearest] - neighbour)) nearest = index;
+    });
+    const degree = nearest + (Math.random() < 0.5 ? -1 : 1);
+    return pitches[Math.min(pitches.length - 1, Math.max(0, degree))];
+  }
+
+  /**
+   * Seasonal growth: rests may sprout, unlocked notes may wither.
+   * Note count is held between MIN_NOTES and MAX_NOTES so the garden can
+   * neither empty out nor fill solid.
+   */
+  function growAndWither() {
+    const climate = hooks.getClimate?.() ?? NEUTRAL_CLIMATE;
+    if (climate.sprout <= 0 && climate.wither <= 0) return;
+
+    const pitches = hooks.getPitches();
+    if (pitches.length === 0) return;
+
+    const pattern = hooks.getPattern().map((step) => ({
+      note: step.note,
+      locked: Boolean(step.locked),
+      probability: step.probability ?? 1
+    }));
+
+    let noteCount = pattern.filter((step) => step.note != null).length;
+    let sprouted = 0;
+    let withered = 0;
+
+    pattern.forEach((step, stepIndex) => {
+      if (step.locked) return;
+      const mark = marks[stepIndex];
+
+      if (step.note == null) {
+        if (noteCount >= MAX_NOTES || Math.random() >= climate.sprout) return;
+        const note = sproutPitch(pattern, stepIndex, pitches);
+        pattern[stepIndex] = { ...step, note };
+        if (mark) {
+          mark.note = note;
+          mark.x = columnCenterX(stepIndex);
+          mark.y = noteToY(note, pitches);
+          mark.energy = Math.max(mark.energy, 0.5);
+        }
+        noteCount += 1;
+        sprouted += 1;
+        return;
+      }
+
+      if (noteCount <= MIN_NOTES || Math.random() >= climate.wither) return;
+      pattern[stepIndex] = { ...step, note: null };
+      if (mark) {
+        mark.note = null;
+        mark.energy = 0;
+        mark.y = noteToY(null, pitches);
+      }
+      noteCount -= 1;
+      withered += 1;
+    });
+
+    if (sprouted === 0 && withered === 0) return;
+    hooks.onPatternFromLife(pattern, { sprouted, withered });
+    draw();
+  }
+
+  /**
    * @param {number} dt
    */
   function drift(dt) {
     const { ratio, index, swing } = hooks.getVoiceFeel();
+    const climate = hooks.getClimate?.() ?? NEUTRAL_CLIMATE;
     const driftScale = 0.04 + Math.min(1, (ratio - 0.25) / 8) * 0.08;
     const chaos = Math.min(1, index / 800);
 
@@ -192,10 +286,12 @@ export function createLivingScore(canvas, hooks) {
       }
 
       const wobble = (Math.random() - 0.5) * swing * 0.9;
-      mark.vx += ((Math.random() - 0.5) * driftScale + wobble * 0.02) * chaos;
-      mark.vy += (Math.random() - 0.5) * driftScale * 0.7 * (0.35 + chaos);
-      mark.vx *= 0.92;
-      mark.vy *= 0.92;
+      mark.vx += ((Math.random() - 0.5) * driftScale * climate.drift + wobble * 0.02) * chaos;
+      mark.vy +=
+        (Math.random() - 0.5) * driftScale * 0.7 * climate.drift * (0.35 + chaos) +
+        climate.wind * dt;
+      mark.vx *= climate.damping;
+      mark.vy *= climate.damping;
       mark.x = Math.min(0.98, Math.max(0.02, mark.x + mark.vx * dt));
       // Soft clamp: unlocked notes stay in the pitch band unless dragged to rest.
       mark.y = Math.min(0.82, Math.max(0.08, mark.y + mark.vy * dt));
@@ -207,10 +303,13 @@ export function createLivingScore(canvas, hooks) {
     const { width, height } = sizeCanvas();
     ctx.clearRect(0, 0, width, height);
 
+    const { palette } = hooks.getClimate?.() ?? NEUTRAL_CLIMATE;
+    const [markR, markG, markB] = palette.mark;
+
     // Soil
     const soil = ctx.createLinearGradient(0, 0, 0, height);
-    soil.addColorStop(0, "#14110e");
-    soil.addColorStop(1, "#0c0a08");
+    soil.addColorStop(0, `rgb(${palette.soilTop.join(", ")})`);
+    soil.addColorStop(1, `rgb(${palette.soilBottom.join(", ")})`);
     ctx.fillStyle = soil;
     ctx.fillRect(0, 0, width, height);
 
@@ -237,15 +336,16 @@ export function createLivingScore(canvas, hooks) {
 
       if (mark.note != null) {
         ctx.beginPath();
-        ctx.fillStyle = `rgba(232, 165, 75, ${alpha * 0.35})`;
+        ctx.fillStyle = `rgba(${markR}, ${markG}, ${markB}, ${alpha * 0.35})`;
         ctx.arc(px, py, base * 2.2, 0, Math.PI * 2);
         ctx.fill();
       }
 
       ctx.beginPath();
+      // Locked marks keep their own green so locking stays unambiguous.
       ctx.fillStyle = mark.locked
         ? `rgba(126, 200, 163, ${0.45 + mark.energy * 0.4})`
-        : `rgba(232, 165, 75, ${alpha})`;
+        : `rgba(${markR}, ${markG}, ${markB}, ${alpha})`;
       ctx.arc(px, py, base, 0, Math.PI * 2);
       ctx.fill();
 
@@ -271,6 +371,7 @@ export function createLivingScore(canvas, hooks) {
     running = true;
     lastTs = performance.now();
     stepsSinceWrite = 0;
+    stepsSinceBar = 0;
     raf = requestAnimationFrame(frame);
   }
 
@@ -287,7 +388,17 @@ export function createLivingScore(canvas, hooks) {
    */
   function onStep(stepIndex, note) {
     if (note != null) bloom(stepIndex);
-    if (writeBackCooldown > 0) {
+
+    const settling = writeBackCooldown > 0;
+    stepsSinceBar += 1;
+    if (stepsSinceBar === GROWTH_STEP && !settling) growAndWither();
+    if (stepsSinceBar >= STEP_COUNT) {
+      stepsSinceBar = 0;
+      // Season clock only turns while the transport runs.
+      hooks.onBar?.();
+    }
+
+    if (settling) {
       writeBackCooldown -= 1;
       return;
     }
@@ -329,6 +440,47 @@ export function createLivingScore(canvas, hooks) {
     draw();
   }
 
+  /**
+   * Second click on an existing mark clears it (rest) and drops its resonance spark.
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {boolean}
+   */
+  function clearSparkAt(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    const x = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    const y = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+    const stepIndex = Math.min(STEP_COUNT - 1, Math.floor(x * STEP_COUNT));
+    const pattern = hooks.getPattern();
+    const step = pattern[stepIndex];
+    if (!step || step.locked || step.note == null) return false;
+
+    const mark = marks[stepIndex];
+    if (!mark || mark.note == null) return false;
+
+    // Hit the glowing mark, not just the whole column.
+    const dx = (mark.x - x) * rect.width;
+    const dy = (mark.y - y) * rect.height;
+    if (Math.hypot(dx, dy) > 18) return false;
+
+    const next = pattern.map((s, i) =>
+      i === stepIndex
+        ? { note: null, locked: false, probability: s.probability ?? 1 }
+        : { note: s.note, locked: Boolean(s.locked), probability: s.probability ?? 1 }
+    );
+
+    mark.note = null;
+    mark.energy = 0;
+    mark.y = noteToY(null, hooks.getPitches());
+    hooks.onPatternFromLife(next);
+    hooks.onPlant?.(stepIndex, null);
+    writeBackCooldown = Math.max(writeBackCooldown, STEP_COUNT);
+    stepsSinceWrite = 0;
+    draw();
+    return true;
+  }
+
   function toggleLockAt(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const x = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
@@ -354,6 +506,10 @@ export function createLivingScore(canvas, hooks) {
   canvas.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
+    if (clearSparkAt(event.clientX, event.clientY)) {
+      drawing = false;
+      return;
+    }
     drawing = true;
     plantAt(event.clientX, event.clientY);
   });

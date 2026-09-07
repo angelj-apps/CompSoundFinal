@@ -1,13 +1,44 @@
 /**
- * Look-ahead step scheduler with swing and per-step play probability.
+ * Look-ahead step scheduler with swing, probability, and armed stack layers.
  */
 
 const LOOKAHEAD_MS = 25;
 const SCHEDULE_AHEAD_SEC = 0.12;
 
 /**
+ * @typedef {object} PatternStep
+ * @property {number | null} note
+ * @property {number} [probability]
+ */
+
+/**
+ * @typedef {object} LayerVoice
+ * @property {number} ratio
+ * @property {number} index
+ * @property {number} cutoff
+ * @property {number} feedback
+ * @property {string} carrierType
+ * @property {string} modType
+ * @property {number} [ampAttack]
+ * @property {number} [ampDecay]
+ */
+
+/**
+ * @typedef {object} StackLayer
+ * @property {PatternStep[]} steps
+ * @property {boolean} armed
+ * @property {LayerVoice | null} [voice]
+ */
+
+/**
+ * @typedef {object} ScheduledVoice
+ * @property {number} note
+ * @property {LayerVoice | null} voice  null = use live Current UI voice
+ */
+
+/**
  * @typedef {object} SchedulerHooks
- * @property {(stepIndex: number, timeSec: number, note: number | null) => void} onStep
+ * @property {(stepIndex: number, timeSec: number, voices: ScheduledVoice[], primaryNote: number | null) => void} onStep
  * @property {(stepIndex: number) => void} [onHighlight]
  */
 
@@ -19,8 +50,12 @@ export function createScheduler(audioCtx, hooks) {
   let running = false;
   let bpm = 120;
   let swing = 0;
-  /** @type {{ note: number | null, probability?: number }[]} */
+  /** @type {PatternStep[]} */
   let pattern = [];
+  /** @type {StackLayer[]} */
+  let stackLayers = [];
+  /** Home pattern silenced while saved layers keep looping. */
+  let patternMuted = false;
   let nextStepTime = 0;
   let stepCounter = 0;
   /** @type {ReturnType<typeof setInterval> | null} */
@@ -31,7 +66,6 @@ export function createScheduler(audioCtx, hooks) {
   }
 
   /**
-   * Delay odd 16ths into the pair (classic swing feel).
    * @param {number} baseTime
    * @param {number} stepIndex
    */
@@ -42,18 +76,40 @@ export function createScheduler(audioCtx, hooks) {
     return baseTime;
   }
 
+  /**
+   * @param {PatternStep | undefined} step
+   * @returns {number | null}
+   */
+  function resolveNote(step) {
+    const note = step?.note ?? null;
+    if (note == null) return null;
+    const probability = step?.probability ?? 1;
+    return Math.random() < probability ? note : null;
+  }
+
   function scheduleAhead() {
     if (!running || pattern.length === 0) return;
 
     while (nextStepTime < audioCtx.currentTime + SCHEDULE_AHEAD_SEC) {
       const stepIndex = stepCounter % pattern.length;
-      const step = pattern[stepIndex];
-      const note = step?.note ?? null;
-      const probability = step?.probability ?? 1;
       const when = swungTime(nextStepTime, stepIndex);
-      const plays = note != null && Math.random() < probability;
 
-      hooks.onStep(stepIndex, when, plays ? note : null);
+      const primaryNote = patternMuted ? null : resolveNote(pattern[stepIndex]);
+      /** @type {ScheduledVoice[]} */
+      const voices = [];
+      if (primaryNote != null) {
+        voices.push({ note: primaryNote, voice: null });
+      }
+
+      for (const layer of stackLayers) {
+        if (!layer.armed || !layer.steps?.length) continue;
+        const layerNote = resolveNote(layer.steps[stepIndex % layer.steps.length]);
+        if (layerNote != null) {
+          voices.push({ note: layerNote, voice: layer.voice ?? null });
+        }
+      }
+
+      hooks.onStep(stepIndex, when, voices, primaryNote);
 
       const delayMs = Math.max(0, (when - audioCtx.currentTime) * 1000);
       setTimeout(() => {
@@ -102,10 +158,28 @@ export function createScheduler(audioCtx, hooks) {
     },
 
     /**
-     * @param {{ note: number | null, probability?: number }[]} steps
+     * @param {PatternStep[]} steps
      */
     setPattern(steps) {
       pattern = steps;
+    },
+
+    /**
+     * @param {boolean} muted
+     */
+    setPatternMuted(muted) {
+      patternMuted = Boolean(muted);
+    },
+
+    isPatternMuted() {
+      return patternMuted;
+    },
+
+    /**
+     * @param {StackLayer[]} layers
+     */
+    setStackLayers(layers) {
+      stackLayers = Array.isArray(layers) ? layers : [];
     }
   };
 }

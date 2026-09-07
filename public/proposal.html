@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Proposal · Garden Groovebox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./docs.css" />
+  </head>
+  <body class="doc">
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <div class="doc-page">
+      <nav class="doc-nav" aria-label="Project pages">
+        <a class="home" href="./index.html">← Instrument</a>
+        <span class="spacer"></span>
+        <a href="./proposal.html" aria-current="page">Proposal</a>
+        <a href="./demo.html">Demo</a>
+        <a href="./blog.html">Blog</a>
+      </nav>
+
+      <h1>Project proposal: Garden Groovebox</h1>
+
+      <p>
+        I propose building a <strong>Generative FM Groovebox</strong>: a 16-step browser instrument
+        where each step triggers a short frequency-modulation (FM) voice, and where the player can
+        both hand-edit patterns and ask the system to generate or mutate material under musical
+        constraints. The primary category is <strong>automated composition</strong>, with
+        <strong>DSP</strong> as the sound engine. Rather than a wall of sliders, timbre will be
+        performed on a 2D pad (horizontal for ratio, vertical for index), so a sound is a place you
+        move to. The instrument's centerpiece will be a <strong>living score</strong>: a canvas where
+        every step is a mark that blooms when it sounds, drifts while unlocked, and writes its height
+        back into the pattern as a scale degree once per bar, so the picture and the sequence compose
+        each other instead of one merely displaying the other. Around that loop I plan two extensions
+        if time allows: a <strong>resonance field</strong> that turns each sounding note into light
+        colored by pitch and shaped by the carrier waveform, and a <strong>melody stack</strong> that
+        saves a melody together with the whole instrument state around it so saved lines can loop
+        underneath the one being edited. If the core is solid, I would also like the garden to have
+        weather: a slow seasonal cycle that changes how restless the marks are, so the piece varies
+        over minutes rather than settling into one texture.
+      </p>
+
+      <p>
+        This project applies three explicit learning targets from the course rubric. First, the class
+        concept is <strong>FM synthesis</strong>: a modulator related to the carrier by a frequency
+        ratio, with modulation depth controlling timbre. Second, the in-class Web Audio technique is
+        using a <strong>GainNode as the modulation index</strong>, routing the modulator into the
+        carrier's <code>frequency</code> AudioParam. Third, the outside-class technique is
+        <strong>constrained probabilistic / Markov-style pattern generation</strong>: unlocked steps
+        are rewritten inside a chosen scale and tonic, with density rules, optional transition bias
+        learned from the current pattern, and a mutate mode that nudges pitches or rests. Step locks
+        are the key interaction here: they let the player pin a motif and ask the machine to fill
+        around it, making generation a collaborator with veto power rather than a one-shot
+        randomizer.
+
+      <h2>Rubric claims (for reference)</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Claim</th>
+            <th>Implementation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Concept from class</td>
+            <td>FM synthesis (ratio + index)</td>
+          </tr>
+          <tr>
+            <td>WebAudio from class</td>
+            <td>GainNode → carrier <code>.frequency</code></td>
+          </tr>
+          <tr>
+            <td>Not covered in class</td>
+            <td>Scale-constrained generate / mutate (+ light Markov)</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>

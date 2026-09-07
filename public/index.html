@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Generative FM Groovebox</title>
+    <title>Garden Groovebox</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -11,6 +11,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./docs.css" />
   </head>
   <body>
     <div class="atmosphere" aria-hidden="true"></div>
@@ -19,8 +20,16 @@
       <header class="brand">
         <div class="brand-text">
           <p class="eyebrow">Computational Sound · Final</p>
-          <h1>Generative FM Groovebox</h1>
-          <p class="tagline">Step sequencer · FM · living audiovisual score</p>
+          <div class="brand-title-row">
+            <h1>🌱 Garden Groovebox 🌱</h1>
+            <nav aria-label="Project pages">
+              <ul class="doc-links">
+                <li><a href="./proposal.html">Proposal</a></li>
+                <li><a href="./demo.html">Demo video</a></li>
+                <li><a href="./blog.html">Blog post</a></li>
+              </ul>
+            </nav>
+          </div>
         </div>
         <div class="global-transport" aria-label="Global transport">
           <p id="play-indicator" class="play-indicator" aria-live="polite">Idle</p>
@@ -48,6 +57,16 @@
             Master
             <input id="master-gain" type="range" min="0" max="1" step="0.01" value="0.35" />
             <span id="master-gain-value" class="readout">0.35</span>
+          </label>
+          <label title="Note attack time">
+            Attack
+            <input id="amp-attack" type="range" min="0.005" max="0.12" step="0.001" value="0.008" />
+            <span id="amp-attack-value" class="readout">0.008</span>
+          </label>
+          <label title="Note amplitude decay">
+            Decay
+            <input id="amp-decay" type="range" min="0.05" max="1.2" step="0.01" value="0.20" />
+            <span id="amp-decay-value" class="readout">0.20</span>
           </label>
           <canvas id="scope" class="scope" width="640" height="48" aria-label="Output waveform"></canvas>
         </section>
@@ -94,6 +113,16 @@
               <button type="button" class="ghost preset-btn" data-preset="sparse">Sparse</button>
               <button type="button" class="ghost preset-btn" data-preset="climb">Climb</button>
             </div>
+            <div class="melody-stack" aria-label="Melody stack">
+              <div class="melody-stack-head">
+                <span class="preset-label">Stack</span>
+              </div>
+              <ul id="melody-stack-list" class="melody-stack-list"></ul>
+              <p class="hint">
+                <strong>Home</strong> is the working tab (▶/❚❚ mutes it without stopping saved layers).
+                Selected melody gets a bright border · Save stores notes + FM + tempo/level + generate
+              </p>
+            </div>
             <p class="hint">Click pitch · Right-click lock · Shift-click probability · Draw below to plant</p>
           </div>
 
@@ -102,7 +131,7 @@
               <h2>Living score</h2>
               <p id="living-status" class="status" aria-live="polite">Idle organism</p>
             </div>
-            <p class="hint">Bloom → drift → bar write-back. Draw to plant · Right-click column to lock.</p>
+            <p class="hint">Bloom → drift → bar write-back. Draw to plant · Click a mark again to clear · Right-click to lock.</p>
             <canvas
               id="living-canvas"
               class="living-canvas"
@@ -110,11 +139,26 @@
               height="200"
               aria-label="Living audiovisual score. Draw to plant pitch. Right-click a column to lock."
             ></canvas>
+            <div class="climate-strip" aria-label="Climate">
+              <span id="season-badge" class="season-badge">Spring</span>
+              <div class="temp-gauge" title="Temperature follows the season">
+                <div class="temp-meter" aria-hidden="true">
+                  <span id="temp-fill" class="temp-fill"></span>
+                </div>
+                <span id="temp-readout" class="readout">Mild · 0.55</span>
+              </div>
+              <label class="climate-bias" title="Shift the whole year warmer or cooler">
+                Bias
+                <input id="climate-bias" type="range" min="-0.35" max="0.35" step="0.01" value="0" />
+                <span id="climate-bias-value" class="readout">0.00</span>
+              </label>
+            </div>
+            <p class="hint">Seasons turn every 4 bars · temperature drives drift, sprouting, color and tone</p>
           </div>
         </section>
 
         <section class="panel generate" aria-label="Generation">
-          <h2>Generate</h2>
+          <h2>Generate Melody (Markov Chains)</h2>
           <label>
             Scale
             <select id="scale">
@@ -124,9 +168,9 @@
             </select>
           </label>
           <label>
-            Tonic (MIDI)
+            Tonic
             <input id="tonic" type="range" min="36" max="72" step="1" value="48" />
-            <span id="tonic-value" class="readout">48</span>
+            <span id="tonic-value" class="readout">C3 · 48</span>
           </label>
           <label>
             Density
@@ -138,19 +182,6 @@
             <button id="mutate-btn" type="button" class="ghost">Mutate</button>
             <button id="undo-btn" type="button" class="ghost" disabled>Undo</button>
           </div>
-          <details class="how-details">
-            <summary>How to use</summary>
-            <ol class="guide-steps compact-steps">
-              <li><strong>Start</strong> — living score + resonance wake up.</li>
-              <li>Drag <strong>FM pad</strong> — brighter index = bigger bursts.</li>
-              <li>
-                Draw on <strong>Living score</strong> to plant pitch.
-                <strong>Right-click</strong> a step or living column to
-                <strong>lock / unlock</strong>.
-              </li>
-              <li>Watch <strong>Resonance</strong> for ripples from those notes. <strong>Undo</strong> peels a layer.</li>
-            </ol>
-          </details>
         </section>
 
         <section class="panel resonance" aria-label="Resonance visual field">
@@ -159,15 +190,15 @@
             <p class="status">Drawn notes → light</p>
           </div>
           <p class="hint">
-            Each MIDI note has its own color. Carrier wave shapes the burst
-            (sine rings · tri shards · square boxes · saw streaks); mod tints the accent.
+            Each MIDI note has its own color. Carrier wave shapes the burst.
+            Planted sparks linger; left-click one again to clear it (and the note).
           </p>
           <canvas
             id="hit-field"
             class="hit-field"
             width="640"
             height="220"
-            aria-label="Visual effects field driven by sequenced and drawn notes"
+            aria-label="Visual effects field. Left-click a planted spark again to clear it."
           ></canvas>
         </section>
       </div>

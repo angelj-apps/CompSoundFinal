@@ -1,5 +1,5 @@
 /**
- * Resonance field — visual effects from hits / plants.
+ * Resonance field: visual effects from hits / plants.
  * Color follows MIDI pitch; burst shape follows carrier (+ mod accent).
  */
 
@@ -52,15 +52,16 @@
 /**
  * @param {HTMLCanvasElement | null} canvas
  * @param {() => VoiceFeel} getVoiceFeel
+ * @param {{ onDismissSpark?: (stepIndex: number) => void }} [hooks]
  */
-export function createHitField(canvas, getVoiceFeel) {
+export function createHitField(canvas, getVoiceFeel, hooks = {}) {
   if (!canvas) {
-    return { start() {}, stop() {}, onHit() {}, onPlant() {} };
+    return { start() {}, stop() {}, onHit() {}, onPlant() {}, clearPlant() {} };
   }
 
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    return { start() {}, stop() {}, onHit() {}, onPlant() {} };
+    return { start() {}, stop() {}, onHit() {}, onPlant() {}, clearPlant() {} };
   }
 
   /** @type {FieldParticle[]} */
@@ -69,6 +70,9 @@ export function createHitField(canvas, getVoiceFeel) {
   let ripples = [];
   /** @type {FieldBolt[]} */
   let bolts = [];
+  /** Persistent plant sparks: click again to dismiss. */
+  /** @type {{ stepIndex: number, note: number, x: number, y: number, color: string, pulse: number }[]} */
+  let plantSparks = [];
   let running = false;
   let raf = 0;
   let lastTs = 0;
@@ -143,11 +147,12 @@ export function createHitField(canvas, getVoiceFeel) {
   /**
    * @param {number} stepIndex
    * @param {number} note
-   * @param {{ planted?: boolean }} [options]
+   * @param {{ planted?: boolean, feel?: VoiceFeel | null }} [options]
    */
   function spawn(stepIndex, note, options = {}) {
     const { width, height } = sizeCanvas();
-    const feel = getVoiceFeel();
+    // Stacked layers pass their own saved voice so the burst matches what is heard.
+    const feel = options.feel ?? getVoiceFeel();
     const carrier = feel.carrierType || "sine";
     const mod = feel.modType || "sine";
     const x = stepToX(stepIndex, width);
@@ -333,6 +338,19 @@ export function createHitField(canvas, getVoiceFeel) {
     if (particles.length > 560) particles = particles.slice(-560);
     if (ripples.length > 36) ripples = ripples.slice(-36);
     if (bolts.length > 40) bolts = bolts.slice(-40);
+
+    if (planted) {
+      plantSparks = plantSparks.filter((spark) => spark.stepIndex !== stepIndex);
+      plantSparks.push({
+        stepIndex,
+        note,
+        x,
+        y,
+        color: primary,
+        pulse: 0
+      });
+    }
+
     ensureAnimating();
   }
 
@@ -500,6 +518,22 @@ export function createHitField(canvas, getVoiceFeel) {
       return true;
     });
 
+    for (const spark of plantSparks) {
+      spark.pulse += dt * 3;
+      const glow = 0.55 + Math.sin(spark.pulse) * 0.25;
+      ctx.save();
+      ctx.globalAlpha = glow;
+      ctx.fillStyle = spark.color;
+      ctx.beginPath();
+      ctx.arc(spark.x, spark.y, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = glow * 0.35;
+      ctx.beginPath();
+      ctx.arc(spark.x, spark.y, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
     ctx.globalAlpha = 1;
   }
 
@@ -514,6 +548,7 @@ export function createHitField(canvas, getVoiceFeel) {
       particles.length === 0 &&
       ripples.length === 0 &&
       bolts.length === 0 &&
+      plantSparks.length === 0 &&
       wash <= 0.02
     ) {
       idleBurst = false;
@@ -530,6 +565,50 @@ export function createHitField(canvas, getVoiceFeel) {
     ctx.fillRect(0, 0, width, height);
   }
 
+  /**
+   * @param {number} stepIndex
+   */
+  function clearPlant(stepIndex) {
+    plantSparks = plantSparks.filter((spark) => spark.stepIndex !== stepIndex);
+  }
+
+  /**
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {boolean}
+   */
+  function dismissSparkAt(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0 || plantSparks.length === 0) return false;
+    const scaleX = (canvas.clientWidth || rect.width) / rect.width;
+    const scaleY = (canvas.clientHeight || rect.height) / rect.height;
+    const px = (clientX - rect.left) * scaleX;
+    const py = (clientY - rect.top) * scaleY;
+
+    let best = -1;
+    let bestDist = 16;
+    plantSparks.forEach((spark, index) => {
+      const dist = Math.hypot(spark.x - px, spark.y - py);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = index;
+      }
+    });
+    if (best < 0) return false;
+
+    const [removed] = plantSparks.splice(best, 1);
+    hooks.onDismissSpark?.(removed.stepIndex);
+    return true;
+  }
+
+  canvas.style.cursor = "crosshair";
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    if (dismissSparkAt(event.clientX, event.clientY)) {
+      event.preventDefault();
+    }
+  });
+
   return {
     start() {
       idleBurst = false;
@@ -545,25 +624,36 @@ export function createHitField(canvas, getVoiceFeel) {
       particles = [];
       ripples = [];
       bolts = [];
+      // Keep plant sparks visible while idle so a second click can still clear them.
       wash = 0;
-      idleBurst = false;
-      clearIdle();
+      idleBurst = plantSparks.length > 0;
+      if (idleBurst) {
+        lastTs = 0;
+        raf = requestAnimationFrame(frame);
+      } else {
+        clearIdle();
+      }
     },
     /**
      * @param {number} stepIndex
      * @param {number | null} note
+     * @param {VoiceFeel | null} [feel]
      */
-    onHit(stepIndex, note) {
+    onHit(stepIndex, note, feel) {
       if (note == null) return;
-      spawn(stepIndex, note, { planted: false });
+      spawn(stepIndex, note, { planted: false, feel: feel ?? null });
     },
     /**
      * @param {number} stepIndex
      * @param {number | null} note
      */
     onPlant(stepIndex, note) {
-      if (note == null) return;
+      if (note == null) {
+        clearPlant(stepIndex);
+        return;
+      }
       spawn(stepIndex, note, { planted: true });
-    }
+    },
+    clearPlant
   };
 }

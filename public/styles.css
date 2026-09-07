@@ -276,23 +276,6 @@ body.is-playing .panel.transport {
   flex: 0 0 auto;
 }
 
-.guide-steps {
-  margin: 0;
-  padding-left: 1rem;
-  font-size: 0.7rem;
-  line-height: 1.4;
-  color: color-mix(in srgb, var(--ink) 82%, var(--ink-dim));
-}
-
-.guide-steps li {
-  margin-bottom: 0.25rem;
-}
-
-.guide-steps strong {
-  color: var(--ink);
-  font-weight: 500;
-}
-
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -326,6 +309,135 @@ body.is-playing .panel.transport {
 .preset-btn.is-selected {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.melody-stack {
+  margin-top: 0.35rem;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.melody-stack-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.melody-stack-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.2rem;
+  max-height: 7.5rem;
+  overflow: auto;
+}
+
+.melody-stack-list:empty::after {
+  display: none;
+}
+
+.melody-stack-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--line);
+  background: var(--bg-well);
+  font-size: 0.62rem;
+}
+
+.melody-stack-item.melody-stack-home {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--bg-well) 70%, #2a2418);
+}
+
+.melody-stack-item.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--bg-well) 55%, #3a2e1c);
+}
+
+.melody-stack-item.is-active.is-playing {
+  border-color: var(--active);
+  box-shadow: inset 0 0 0 1px var(--active);
+}
+
+.stack-spacer {
+  width: 1.7rem;
+}
+
+.stack-save-btn {
+  justify-self: end;
+}
+
+.melody-stack-item.is-playing {
+  border-color: color-mix(in srgb, var(--active) 55%, var(--line));
+}
+
+.melody-stack-item .stack-transport {
+  min-width: 1.85rem;
+  padding: 0.2rem 0.35rem;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.melody-stack-item .stack-transport.is-playing {
+  color: var(--active);
+  border-color: var(--active);
+}
+
+.stack-icon {
+  display: inline-block;
+  font-size: 0.7rem;
+  letter-spacing: -0.05em;
+}
+
+.melody-stack-item .stack-name {
+  justify-self: stretch;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  border-color: transparent;
+  background: transparent;
+  padding: 0.15rem 0.25rem;
+  font-size: 0.62rem;
+  font-family: inherit;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.melody-stack-item .stack-name:hover {
+  color: var(--accent);
+  border-color: var(--line);
+}
+
+.melody-stack-item button {
+  padding: 0.15rem 0.35rem;
+  font-size: 0.6rem;
+}
+
+.melody-stack-item .stack-icon-btn {
+  min-width: 1.7rem;
+  padding: 0.2rem 0.3rem;
+  line-height: 1;
+  color: var(--ink-dim);
+}
+
+.melody-stack-item .stack-icon-btn:hover {
+  color: var(--accent);
+}
+
+.compact-btn {
+  padding: 0.2rem 0.45rem;
+  font-size: 0.65rem;
 }
 
 .pad-hint {
@@ -550,6 +662,66 @@ body.is-playing .panel.transport {
   cursor: crosshair;
 }
 
+.climate-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+  flex: 0 0 auto;
+}
+
+.season-badge {
+  font-family: var(--font-display);
+  font-size: 0.62rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  padding: 0.1rem 0.35rem;
+  flex: 0 0 auto;
+}
+
+.temp-gauge {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1 1 7rem;
+  min-width: 0;
+}
+
+.temp-meter {
+  flex: 1 1 auto;
+  min-width: 2.5rem;
+  height: 0.4rem;
+  border: 1px solid var(--line);
+  background: #0c0a08;
+  overflow: hidden;
+}
+
+.temp-fill {
+  display: block;
+  height: 100%;
+  width: 50%;
+  background: var(--accent);
+  transition: width 180ms linear, background-color 400ms linear;
+}
+
+.climate-bias {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  flex: 1 1 8rem;
+  min-width: 0;
+  font-size: 0.62rem;
+}
+
+.climate-bias input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 3rem;
+}
+
 .hit-field {
   display: block;
   width: 100%;
@@ -559,40 +731,6 @@ body.is-playing .panel.transport {
   margin-top: 0.3rem;
   border: 1px solid var(--line);
   background: #0c0a08;
-}
-
-.how-details {
-  margin-top: auto;
-  padding-top: 0.35rem;
-  border-top: 1px solid var(--line);
-  flex: 0 0 auto;
-  font-size: 0.62rem;
-  color: var(--ink-dim);
-}
-
-.how-details summary {
-  cursor: pointer;
-  font-family: var(--font-display);
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--accent-dim);
-  margin-bottom: 0.25rem;
-}
-
-.how-details[open] summary {
-  color: var(--accent);
-}
-
-.compact-steps {
-  margin: 0.25rem 0 0;
-  padding-left: 1.1rem;
-  display: grid;
-  gap: 0.25rem;
-}
-
-.compact-steps li {
-  line-height: 1.35;
 }
 
 .scope {
@@ -736,6 +874,12 @@ body.is-playing #start-btn {
 
 .step .idx {
   opacity: 0.5;
+}
+
+.step .pitch {
+  font-size: 0.58rem;
+  letter-spacing: -0.02em;
+  font-variant-numeric: normal;
 }
 
 .step.filled {

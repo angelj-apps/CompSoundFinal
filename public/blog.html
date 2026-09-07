@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blog · Generative FM Groovebox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./docs.css" />
+  </head>
+  <body class="doc">
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <div class="doc-page">
+      <nav class="doc-nav" aria-label="Project pages">
+        <a class="home" href="./index.html">← Instrument</a>
+        <span class="spacer"></span>
+        <a href="./proposal.html">Proposal</a>
+        <a href="./demo.html">Demo</a>
+        <a href="./blog.html" aria-current="page">Blog</a>
+      </nav>
+
+      <h1>Building Garden Groovebox in the Browser</h1>
+
+      <h2>What it is</h2>
+
+      <p>
+        The <strong>Garden Groovebox</strong> is a 16-step sequencer that plays short FM notes
+        and can rewrite its own pattern under scale constraints. You perform with three levers at
+        once: <strong>timbre</strong> (FM ratio and index), <strong>time</strong> (BPM + step grid),
+        and <strong>structure</strong> (generate / mutate / locks).
+      </p>
+
+      <p>
+        It is deliberately small, but the interaction is not “a wall of sliders.” The primary FM
+        control is a <strong>2D performance pad</strong> (ratio × index), patterns can be painted, and
+        a <strong>Living score</strong> canvas closes an audiovisual loop: hits bloom marks, unlocked
+        marks drift, and each bar can write pitch back into the sequencer.
+      </p>
+
+      <p>
+        Three things grew on top of that loop. A <strong>Resonance field</strong> turns every sounding
+        note into light, colored by pitch and shaped by the carrier waveform. A
+        <strong>melody stack</strong> lets you save a melody (notes plus the entire instrument around
+        them) and loop it underneath the one you are editing. And a <strong>season clock</strong>
+        gives the garden weather, so how far the marks wander is no longer a constant.
+      </p>
+
+      <h2>Signal flow</h2>
+
+      <p>Each scheduled hit builds a disposable FM voice:</p>
+
+      <pre><code>ModulatorOsc ──► GainNode (index) ──► CarrierOsc.frequency
+      ▲                                 │
+      └──── FeedbackGain ◄──────────────┤
+                                        │
+                              CarrierOsc ──► Lowpass ──► GainNode (amp env) ──► Master ──► Analyser ──► destination</code></pre>
+
+      <ul>
+        <li>
+          <strong>Carrier frequency</strong> comes from the step’s MIDI note
+          (<code>440 * 2^((midi - 69) / 12)</code>).
+        </li>
+        <li>
+          <strong>Modulator frequency</strong> is <code>carrierHz * ratio</code>, the classic
+          simple-FM relationship.
+        </li>
+        <li>
+          <strong>Index</strong> is the GainNode’s gain in hertz of frequency deviation. Connecting
+          that gain to <code>carrier.frequency</code> is AudioParam modulation.
+        </li>
+        <li>Both <strong>amplitude</strong> and <strong>index</strong> are enveloped so each hit blooms then settles.</li>
+        <li>
+          <strong>Cutoff</strong>, <strong>feedback</strong>, and separate
+          <strong>carrier/mod waveforms</strong> push the same graph into a more playable instrument
+          without changing the class technique.
+        </li>
+      </ul>
+
+      <h2>Scheduling</h2>
+
+      <p>
+        Transport uses a standard look-ahead loop (~25 ms tick, ~120 ms horizon) against
+        <code>AudioContext.currentTime</code>:
+      </p>
+
+      <ol>
+        <li>While the next step time falls inside the horizon, schedule that step.</li>
+        <li>Step period is a sixteenth note: <code>(60 / bpm) / 4</code> seconds.</li>
+        <li><strong>Swing</strong> delays odd-indexed 16ths into each pair for a groove feel.</li>
+        <li>Each step carries a <strong>play probability</strong>; the scheduler may skip sounding a written note.</li>
+        <li>
+          Active-step highlighting is delayed until the step’s audio time so the UI does not jump
+          early during look-ahead.
+        </li>
+      </ol>
+
+      <p>
+        Because notes are scheduled into the future, moving <strong>Index</strong> /
+        <strong>Ratio</strong> / <strong>Cutoff</strong> mid-pattern affects <em>new</em> voices with
+        the current slider values without tearing down the clock.
+      </p>
+
+      <p>
+        The scheduler also carries <strong>stack layers</strong>: saved melodies set to play take
+        their own step on the same clock, each with the FM voice it was saved with. When several
+        notes land on one step, voice amplitude scales by <code>1 / sqrt(N)</code> so stacking four
+        layers does not clip the master bus. The working melody can be muted independently, which is
+        how you audition the stack without the melody you are editing.
+      </p>
+
+      <p>
+        The master bus feeds an <strong>AnalyserNode</strong> drawn to a canvas scope so FM brightness
+        is visible as well as audible.
+      </p>
+
+      <h2>Generation model</h2>
+
+      <p>Steps are <code>{ note: number | null, locked: boolean }</code>.</p>
+
+      <p><strong>Generate</strong> (unlocked steps only):</p>
+
+      <ul>
+        <li>Build a pitch set from tonic + scale across a couple of octaves.</li>
+        <li>Decide rest vs note with a user-facing <strong>density</strong> control (downbeats slightly denser).</li>
+        <li>
+          Prefer a light <strong>first-order Markov</strong> sample when the current pattern has
+          transitions; otherwise weighted random.
+        </li>
+        <li>
+          Status text reports <code>markov</code> vs <code>weighted</code> pick counts so the
+          outside-class technique is visible in the UI.
+        </li>
+        <li><strong>Undo</strong> restores the previous pattern after generate/mutate.</li>
+      </ul>
+
+      <p><strong>Mutate</strong> (unlocked steps only, per-step probability):</p>
+
+      <ul>
+        <li>Rest → maybe become a scale tone.</li>
+        <li>Note → become a rest, or nudge ±1 degree in the pitch set.</li>
+      </ul>
+
+      <p>
+        Locks let you pin a motif and ask the machine to fill around it. That interaction is the
+        compositional point: generation is a collaborator with veto power, not a one-shot randomizer.
+      </p>
+
+      <h2>The garden and its weather</h2>
+
+      <p>
+        The living score keeps one mark per step column. Marks bloom when their step sounds, unlocked
+        marks drift, and once per bar the unlocked marks write their height back into the pattern as
+        scale degrees. Draw on the canvas to plant a pitch, click a mark again to clear it,
+        right-click a column to lock it.
+      </p>
+
+      <p>
+        Drift used to be governed entirely by the FM voice (ratio set the step size, index set the
+        chaos, swing added wobble), which meant the garden was equally restless forever.
+        <strong>Climate</strong> adds the missing variable:
+      </p>
+
+      <ul>
+        <li>A <strong>season</strong> advances every four bars while the transport runs.</li>
+        <li>
+          Each season declares a <strong>temperature target</strong> plus its own drift, damping,
+          wind, sprout/wither odds, tone tint, and palette.
+        </li>
+        <li>
+          Temperature eases 25% of the remaining gap per bar. It never jumps, so a season boundary
+          lands mid-glide and spring reads as <em>warming up</em> rather than a switch flipping.
+        </li>
+        <li>Temperature, not the season, is what actually drives everything downstream.</li>
+      </ul>
+
+      <p>
+        That easing has a pleasant consequence worth measuring. Because four bars at 25% closes only
+        about 68% of the gap, temperature never reaches its target; it settles into a stable limit
+        cycle between <strong>0.20 and 0.82</strong>. The seasons stay distinct forever without ever
+        hitting the extremes, and the whole year is a single line of arithmetic.
+      </p>
+
+      <p>Temperature then fans out into four places:</p>
+
+      <ol>
+        <li>
+          <strong>Drift</strong>: equilibrium speed ranges from ~0.08x in winter to ~2.1x at peak
+          summer, relative to the old constant. Damping matters as much as step size here: raising
+          both at once compounds, and the first tuning pass made summer about five times too violent.
+        </li>
+        <li>
+          <strong>Growth</strong>: unlocked rests may sprout a pitch one scale step from their
+          nearest neighbour; unlocked notes may wither back to rest. Locked steps are untouched and
+          note count is held between 2 and 13 of 16, so the garden can neither empty out nor fill
+          solid. Growth runs mid-bar so it never shares a step with write-back.
+        </li>
+        <li>
+          <strong>Palette</strong>: mark and soil colors blend between the outgoing and incoming
+          season by the same eased factor, so the picture glides with the sound.
+        </li>
+        <li>
+          <strong>Tone</strong>: cutoff and amp decay get a multiplier, clamped to each slider's
+          range and never written back to the inputs. Winter is dark and long, summer bright and
+          short. The tint goes neutral when the transport stops, so an idle instrument always
+          auditions exactly as its sliders read.
+        </li>
+      </ol>
+
+      <p>
+        A <strong>Bias</strong> slider shifts the entire year warmer or colder without fighting the
+        animation, which a self-moving slider would.
+      </p>
+
+      <h2>Design choices</h2>
+
+      <h3>Why FM instead of a sample kit?</h3>
+      <p>
+        It makes the class technique audible. Turning <strong>Index</strong> from 0 to a few hundred
+        Hz is an unmistakable timbre lesson, and it photographs well in a four-minute demo.
+      </p>
+
+      <h3>Why Markov-lite instead of a full grammar?</h3>
+      <p>
+        A transition table seeded from the <em>current</em> pattern keeps generation related to what
+        you are already hearing. It is easy to explain, easy to abuse (lock → generate), and clearly
+        “not covered in a basic Web Audio lab.”
+      </p>
+
+      <h3>Why seeds (Pulse / Sparse / Climb)?</h3>
+      <p>
+        Cold-start problem. Presets load pattern + BPM + FM defaults so the first Start is already a
+        piece, not an empty grid.
+      </p>
+
+      <h3>Why does saving a melody save the whole instrument?</h3>
+      <p>
+        Saving only the notes was a trap: a melody recalled without its FM voice, tempo, and generate
+        settings sounded nothing like the thing you saved. A save is a <strong>scene</strong> (notes
+        plus pad, tone extras, tempo/level, generate, and climate bias), so recalling it restores the
+        moment, and a looping layer keeps its own voice while it plays under whatever you are editing
+        now.
+      </p>
+
+      <h3>Why seasons instead of more sliders?</h3>
+      <p>
+        The garden already had four or five plausible new knobs (wind, moisture, gravity toward the
+        tonic, crowding). A season is a <em>bundle</em> of them, so one automatic factor buys variety
+        that five manual sliders would have made into homework.
+      </p>
+
+      <h2>Module map</h2>
+
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>gestures.js</code></td><td>FM pad interaction</td></tr>
+          <tr><td><code>hitField.js</code></td><td>Particle/ripple field driven by hits + plants</td></tr>
+          <tr><td><code>fmVoice.js</code></td><td>FM note factory (index, filter, feedback, waveforms)</td></tr>
+          <tr>
+            <td><code>scheduler.js</code></td>
+            <td>Look-ahead transport + swing + step probability + stack layers + Home mute</td>
+          </tr>
+          <tr>
+            <td><code>melodyStack.js</code></td>
+            <td>Save / play / load melody scenes: notes + full instrument state (localStorage)</td>
+          </tr>
+          <tr><td><code>generator.js</code></td><td>Scale pitches, generate, mutate, Markov meta</td></tr>
+          <tr><td><code>visualizer.js</code></td><td>Master-bus scope</td></tr>
+          <tr><td><code>presets.js</code></td><td>Seed patterns</td></tr>
+          <tr><td><code>livingArt.js</code></td><td>Living score loop (bloom, drift, growth, write-back)</td></tr>
+          <tr>
+            <td><code>climate.js</code></td>
+            <td>Season clock + eased temperature driving drift, growth, palette, tone</td>
+          </tr>
+          <tr><td><code>app.js</code></td><td>UI binding, undo stack, performance state</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Try this path</h2>
+
+      <ol>
+        <li>Load <strong>Pulse</strong>, press Start.</li>
+        <li>Sweep <strong>Index</strong> while it runs, and watch the Resonance bursts grow with it.</li>
+        <li>Draw a line on the living score, then right-click to lock a few steps.</li>
+        <li>Mutate, then Generate: the status line tells you whether it picked markov or weighted.</li>
+        <li>Wait out a season change and watch the marks loosen or stiffen.</li>
+        <li>
+          <strong>Save</strong> the melody, press ▶ to loop it under a new line, then
+          <strong>❚❚</strong> Home to hear the save alone.
+        </li>
+        <li>Compare <strong>Sparse</strong> and <strong>Climb</strong>.</li>
+      </ol>
+
+      <p>
+        That path is the whole thesis: DSP you can hear, scheduling you can trust, generation you can
+        steer, and a picture that composes back.
+      </p>
+    </div>
+  </body>
+</html>

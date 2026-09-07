@@ -13,6 +13,21 @@ export function midiToHz(midiNote) {
   return 440 * 2 ** ((midiNote - 69) / 12);
 }
 
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+/**
+ * MIDI note number → pitch name with accidental + octave (e.g. "C#4").
+ * @param {number} midiNote
+ * @returns {string}
+ */
+export function midiToNoteName(midiNote) {
+  const n = Math.round(Number(midiNote));
+  if (!Number.isFinite(n)) return "?";
+  const name = NOTE_NAMES[((n % 12) + 12) % 12];
+  const octave = Math.floor(n / 12) - 1;
+  return `${name}${octave}`;
+}
+
 /**
  * @typedef {object} FmVoiceParams
  * @property {number} carrierHz
@@ -26,6 +41,7 @@ export function midiToHz(midiNote) {
  * @property {OscillatorType} [modType]
  * @property {number} [cutoff]
  * @property {number} [feedback]
+ * @property {number} [ampLevel] peak amplitude 0–1 (stack voice scaling)
  */
 
 /**
@@ -46,7 +62,8 @@ export function playFmNote(audioCtx, destination, params, when = audioCtx.curren
     carrierType = "sine",
     modType = "sine",
     cutoff = 5000,
-    feedback = 0
+    feedback = 0,
+    ampLevel = 1
   } = params;
 
   const start = Math.max(when, audioCtx.currentTime);
@@ -81,7 +98,8 @@ export function playFmNote(audioCtx, destination, params, when = audioCtx.curren
   feedbackGain.gain.setValueAtTime(Math.max(0, feedback) * carrierHz * 0.35, start);
 
   ampEnv.gain.setValueAtTime(0.0001, start);
-  ampEnv.gain.exponentialRampToValueAtTime(1, start + attack);
+  const peakAmp = Math.max(0.0001, Math.min(1, ampLevel));
+  ampEnv.gain.exponentialRampToValueAtTime(peakAmp, start + attack);
   ampEnv.gain.exponentialRampToValueAtTime(0.0001, start + attack + decay);
 
   modulator.connect(modulationIndex);
